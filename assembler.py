@@ -52,6 +52,7 @@ fun_list['mflo'] = dec2bin(0x11, length=6)
 fun_list['mthi'] = dec2bin(0x12, length=6)
 fun_list['mtlo'] = dec2bin(0x13, length=6)
 fun_list['mult'] = dec2bin(0x18, length=6)
+fun_list['eret'] = dec2bin(0x18, length=6)
 fun_list['multu'] = dec2bin(0x19, length=6)
 fun_list['div'] = dec2bin(0x1A, length=6)
 fun_list['divu'] = dec2bin(0x1B, length=6)
@@ -75,6 +76,8 @@ op_list['beq'] = dec2bin(0x04, length=6)
 op_list['bne'] = dec2bin(0x05, length=6)
 op_list['blez'] = dec2bin(0x06, length=6)
 op_list['bgtz'] = dec2bin(0x07, length=6)
+op_list['bltz'] = dec2bin(0x01, length=6)
+op_list['bgez'] = dec2bin(0x01, length=6)
 op_list['addi'] = dec2bin(0x08, length=6)
 op_list['addiu'] = dec2bin(0x09, length=6)
 op_list['slti'] = dec2bin(0x0A, length=6)
@@ -101,7 +104,10 @@ for key, value in op_list.items():
 for key, value in fun_list.items():
     inv_fun_list[value] = key
 
-inv_op_list[dec2bin(0, length=6)] = 'r'
+inv_fun_list[dec2bin(0x18, length=6)] = 'mult'
+inv_op_list[dec2bin(0x00, length=6)] = 'r'
+inv_op_list[dec2bin(0x01, length=6)] = 'b'
+inv_op_list[dec2bin(0x10, length=6)] = 'e'
 
 
 def find_register(reg):
@@ -179,6 +185,11 @@ class mips_re:
 
 mr = mips_re()
 
+shift_instruction = ['sll', 'srl', 'sra']
+ls_instruction = ['lw', 'lb', 'lh', 'lbu', 'lhu', 'sw', 'sb', 'sh']
+branch_instruction = ['beq', 'bne']
+new_branch_instruction = ['blez', 'bgtz', 'bltz', 'bgez']
+
 
 def assembler(code):
     binary = []
@@ -241,15 +252,32 @@ def assembler(code):
             op = op_list[line[0]]
             if op == dec2bin(0x00, length=6):
                 fun = fun_list[line[0]]
-                if line[0] == 'sll' or line[0] == 'srl' or line[0] == 'sra':
+                if line[0] in shift_instruction:
                     m = mr.it.match(line[1])
                     rs = find_register(0)
                     rt = find_register(m.group(2))
                     rd = find_register(m.group(1))
                     shamt = dec2bin(m.group(3), length=5)
-                elif line[0] == 'jr':
+                elif line[0] == 'jr' or line[0] == 'mthi' or line[0] == 'mtlo':
                     m = mr.jr.match(line[1])
                     rs = find_register(m.group(1))
+                    rt = find_register(0)
+                    rd = find_register(0)
+                    shamt = dec2bin(0x00, length=5)
+                elif line[0] == 'jalr':
+                    m = mr.pm.match(line[1])
+                    rs = find_register(m.group(2))
+                    rt = find_register(0)
+                    rd = find_register(m.group(1))
+                    shamt = dec2bin(0x00, length=5)
+                elif line[0] == 'mfhi' or line[0] == 'mflo':
+                    m = mr.jr.match(line[1])
+                    rs = find_register(0)
+                    rt = find_register(0)
+                    rd = find_register(m.group(1))
+                    shamt = dec2bin(0x00, length=5)
+                elif line[0] == 'break' or line[0] == 'syscall':
+                    rs = find_register(0)
                     rt = find_register(0)
                     rd = find_register(0)
                     shamt = dec2bin(0x00, length=5)
@@ -260,6 +288,20 @@ def assembler(code):
                     rd = find_register(m.group(1))
                     shamt = dec2bin(0x00, length=5)
                 b = op + rs + rt + rd + shamt + fun
+            elif op == dec2bin(0x10, length=6):
+                if line[0] == 'mfco' or line[0] == 'mtco':
+                    m = mr.it.match(line[1])
+                    if line[0] == 'mfco':
+                        rs = find_register(0)
+                    else:
+                        rs = find_register(4)
+                    rt = find_register(m.group(1))
+                    rd = find_register(m.group(2))
+                    i = dec2bin(int(m.group(3)), length=11)
+                    b = op + rs + rt + rd + i
+                else:
+                    fun = fun_list[line[0]]
+                    b = op + '1' + dec2bin(0x00, length=19) + fun
             elif line[0] == 'j' or line[0] == 'jal':
                 m = mr.jt.match(line[1])
                 target = m.group(1)
@@ -270,7 +312,7 @@ def assembler(code):
                     non_deal_label.append((len(binary), target, 'j'))
                 b = op + i
             else:
-                if line[0] == 'lw' or line[0] == 'sw':
+                if line[0] in ls_instruction:
                     m = mr.ls.match(line[1])
                     rs = find_register(m.group(3))
                     rt = find_register(m.group(1))
@@ -281,19 +323,33 @@ def assembler(code):
                     rt = find_register(m.group(1))
                     i = dec2bin(m.group(2), 16)
                 else:
-                    m = mr.it.match(line[1])
-                    rs = find_register(m.group(2))
-                    rt = find_register(m.group(1))
-                    if line[0] == 'beq' or line[0] == 'bne':
-                        rs, rt = rt, rs
-                        target = m.group(3)
+                    if line[0] in new_branch_instruction:
+                        m = mr.pl.match(line[1])
+                        rs = find_register(m.group(1))
+                        if line[0] == 'bgez':
+                            rt = find_register(1)
+                        else:
+                            rt = find_register(0)
+                        target = m.group(2)
                         if target in labels:
                             i = dec2bin((int(labels[target], 2) - len(binary)), length=16)
                         else:
                             i = ''
                             non_deal_label.append((len(binary), target, 'branch'))
                     else:
-                        i = dec2bin(m.group(3), 16)
+                        m = mr.it.match(line[1])
+                        rs = find_register(m.group(2))
+                        rt = find_register(m.group(1))
+                        if line[0] in branch_instruction:
+                            rs, rt = rt, rs
+                            target = m.group(3)
+                            if target in labels:
+                                i = dec2bin((int(labels[target], 2) - len(binary)), length=16)
+                            else:
+                                i = ''
+                                non_deal_label.append((len(binary), target, 'branch'))
+                        else:
+                            i = dec2bin(m.group(3), 16)
                 b = op + rs + rt + i
 
         binary.append(b)
@@ -329,13 +385,28 @@ def inv_assembler(binary):
         addr = int(line[6:], 2)
         if op == 'r':
             op = inv_fun_list[line[26:]]
-            if op == 'jr':
+            if op == 'jr' or op == 'mthi' or op == 'mtlo':
                 c = op + ' ' + rs
-            elif op == 'sll' or op == 'srl' or op == 'sra':
+            elif op == 'mfhi' or op == 'mflo':
+                c = op + ' ' + rd
+            elif op == 'break' or op == 'syscall':
+                c = op
+            elif op == 'jalr':
+                c = op + ' ' + rd + ', ' + rs
+            elif op in shift_instruction:
                 c = op + ' ' + rd + ', ' + rt + ', ' + shamt
             else:
                 c = op + ' ' + rd + ', ' + rs + ', ' + rt
-
+        elif op == 'e':
+            if line[26:] == dec2bin(0x18, length=6):
+                op = 'eret'
+                c = op
+            else:
+                if rs == find_register_name(0):
+                    op = 'mfco'
+                else:
+                    op = 'mtco'
+                c = op + ' ' + rt + ', ' + rd + ', ' + str(int(line[30:], 2))
         elif op == 'j' or op == 'jal':
             if addr in labels:
                 c = op + ' ' + labels[addr]
@@ -351,9 +422,9 @@ def inv_assembler(binary):
         else:
             if op == 'lui':
                 c = op + ' ' + rt + ', ' + i
-            elif op == 'lw' or op == 'sw':
+            elif op in ls_instruction:
                 c = op + ' ' + rt + ', ' + i + '(' + rs + ')'
-            elif op == 'beq' or op == 'bne':
+            elif op in branch_instruction:
                 i = int(i)
                 if i + len(code) in labels:
                     c = op + ' ' + rs + ', ' + rt + ', ' + labels[i + len(code)]
@@ -366,15 +437,34 @@ def inv_assembler(binary):
                     else:
                         non_deal_label.append((len(code), i + len(code)))
                         c = op + ' ' + rs + ', ' + rt + ', '
+            elif op == 'b' or op in new_branch_instruction:
+                if op == 'b':
+                    if rt == find_register_name(0):
+                        op = 'bltz'
+                    else:
+                        op = 'bgez'
+                i = int(i)
+                if i + len(code) in labels:
+                    c = op + ' ' + rs + ', ' + labels[i + len(code)]
+                else:
+                    if i < 0:
+                        code[i + len(code)] = 'L' + str(cur_label_number) + ':' + code[i + len(code)]
+                        labels[i + len(code)] = 'L' + str(cur_label_number)
+                        c = op + ' ' + rs + ', ' + labels[i + len(code)]
+                        cur_label_number += 1
+                    else:
+                        non_deal_label.append((len(code), i + len(code)))
+                        c = op + ' ' + rs + ', '
             else:
                 c = op + ' ' + rs + ', ' + rt + ', ' + i
 
         code.append(c)
 
     for line, target in non_deal_label:
-        code[target] = 'L' + str(cur_label_number) + ':' + code[target]
-        labels[target] = 'L' + str(cur_label_number)
+        if target not in labels:
+            code[target] = 'L' + str(cur_label_number) + ':' + code[target]
+            labels[target] = 'L' + str(cur_label_number)
+            cur_label_number += 1
         code[line] += labels[target]
-        cur_label_number += 1
 
     return code
